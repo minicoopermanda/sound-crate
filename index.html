@@ -336,12 +336,19 @@ const touch=matchMedia("(pointer:coarse)").matches;const pref=ls.get("sp-app");$
 const remoteOn=()=>$("spApp").checked&&!!ls.get("sp-tok");const syncEmbed=()=>{$("embed").hidden=remoteOn()};
 $("spApp").onchange=()=>{ls.set("sp-app",$("spApp").checked);syncEmbed();const t=ls.get("sp-tok");if($("spApp").checked&&t&&!(t.s||"").includes("user-modify-playback-state"))msg("To play in the app, tap Disconnect, then Connect Spotify again and approve.")};
 let rPlaying=false;
+async function pickDevice(){const j=await api("/me/player/devices");const ds=(j&&j.devices)||[];
+ return ds.find(d=>d.is_active)||ds.find(d=>touch&&d.type==="Smartphone")||ds.find(d=>!touch&&d.type==="Computer")||ds[0]||null}
 async function remotePlay(){const s=SONGS[queue[qpos]];if(!s)return;
  if(!s.id){toast(s.y?"Not on Spotify, opening it on YouTube":"No exact match, opening a Spotify search");window.open(spotifyUrl(s),"_blank");return}
  const uris=queue.slice(qpos,qpos+60).map(i=>SONGS[i]).filter(x=>x&&x.id).map(x=>"spotify:track:"+x.id);
- try{await api("/me/player/play",{method:"PUT",body:JSON.stringify({uris})});rPlaying=true;$("play").textContent="⏸ Pause";toast("Playing in your Spotify app")}
- catch(e){if(e.status===404){msg("Open the Spotify app, play any song for a second, then come back and tap ▶ again.");toast("Open Spotify first");location.href="spotify:track:"+s.id}
-  else if(e.status===403||e.status===401){msg("Tap Disconnect, then Connect Spotify again to allow playing in the app.")}else msg("Spotify said: "+e.message)}}
+ const say=t=>{toast(t);msg(t)};
+ try{const t=ls.get("sp-tok")||{};if(!(t.s||"").includes("user-modify-playback-state")){say("Tap Disconnect, then Connect Spotify again to allow playing in the app.");return}
+  const dev=await pickDevice();
+  if(!dev){say("Spotify app not found. Open the Spotify app (leave it open in the background), then tap the song again.");return}
+  if(!dev.is_active){await api("/me/player",{method:"PUT",body:JSON.stringify({device_ids:[dev.id],play:false})});await new Promise(z=>setTimeout(z,700))}
+  await api("/me/player/play?device_id="+encodeURIComponent(dev.id),{method:"PUT",body:JSON.stringify({uris})});
+  rPlaying=true;$("play").textContent="⏸ Pause";say(`Playing “${s.t}” on ${dev.name}`)}
+ catch(e){if(e.status===401||(e.status===403&&/scope/i.test(e.message)))say("Tap Disconnect, then Connect Spotify again to allow playing in the app.");else say("Spotify said: "+e.message)}}
 const _playCur=playCur;playCur=function(){if(remoteOn())remotePlay();else _playCur()};
 const _playBtn=$("play").onclick;$("play").onclick=async()=>{if(!remoteOn())return _playBtn();if(queue[qpos]==null){surprise("any");return}
  try{const st=await api("/me/player");if(st&&st.is_playing){await api("/me/player/pause",{method:"PUT"});rPlaying=false;$("play").textContent="▶ Play"}
