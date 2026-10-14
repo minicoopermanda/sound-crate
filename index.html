@@ -132,7 +132,7 @@ body{padding-block:0 260px}
   <section class="sp" id="sp" aria-label="Spotify">
     <h2>🟢 Spotify</h2>
     <div class="row" id="spFile" hidden><a class="play" id="spMove" href="http://127.0.0.1:8765/">Open the new player (keeps your ⭐)</a><span class="count">Double-click “Start Sound Crate” in Documents\Sound Crate first</span></div>
-    <div class="row" id="spOff" hidden><button class="play" id="spConnect">Connect Spotify</button><span class="count">Then add your ⭐ songs to Liked Songs or a playlist</span></div>
+    <div class="row" id="spOff" hidden><button class="play" id="spConnect">Connect Spotify</button><span class="count">Then add songs to Liked Songs or a playlist, and your ⭐ sync between laptop and phone</span></div>
     <div class="row" id="spOn" hidden>
       <select id="spDest" aria-label="Where to add"><option value="liked">Add to Liked Songs</option><optgroup label="My playlists" id="spPls"></optgroup><option value="new">New playlist…</option></select>
       <input id="spNew" placeholder="New playlist name" hidden>
@@ -320,12 +320,22 @@ async function go(){const list=[...favs].map(i=>SONGS[i]).filter(Boolean);const 
   msg(`Done: ${n} song${n===1?"":"s"} added to ${where}.`+(ids.length>n&&d!=="liked"?` ${ids.length-n} were already there.`:"")+(skip?` ${skip} aren't on Spotify, so they were skipped.`:""));toast("Added to Spotify ✓")}
  catch(e){msg("Spotify said: "+e.message+(e.status===403?" (tap Disconnect, then Connect Spotify again and approve).":""))}
  $("spGo").disabled=false}
+/* favourites sync through a private Spotify playlist, so laptop and phone share stars */
+const FAVNAME="Sound Crate ⭐ Favourites";let favPid=null;const idIdx={};SONGS.forEach(x=>{if(x.id&&idIdx[x.id]===undefined)idIdx[x.id]=x.i});
+async function favSync(){try{let p=PLS.find(x=>x.name===FAVNAME);
+ if(!p){const local=[...favs].map(i=>SONGS[i]).filter(x=>x&&x.id);if(!local.length)return;p=await api("/me/playlists",{method:"POST",body:JSON.stringify({name:FAVNAME,public:false,description:"Stars from Sound Crate (keeps laptop and phone in sync)"})});await loadPlaylists()}
+ favPid=p.id;const remote=await playlistIds(favPid);let added=0;
+ remote.forEach(id=>{const i=idIdx[id];if(i!==undefined&&!favs.has(i)){favs.add(i);added++}});
+ const push=[...new Set([...favs].map(i=>SONGS[i]).filter(x=>x&&x.id&&!remote.has(x.id)).map(x=>x.id))];if(push.length)await addToPlaylist(favPid,push);
+ if(added){saveFavs();renderTabs();renderList(false);toast(`${added} favourite${added===1?"":"s"} synced from your other device ⭐`)}}catch(e){console.warn("fav sync",e)}}
+const _toggleFav=toggleFav;toggleFav=function(i){_toggleFav(i);const x=SONGS[i];if(!favPid||!x||!x.id)return;
+ const uri="spotify:track:"+x.id;(favs.has(i)?addToPlaylist(favPid,[x.id]):api(`/playlists/${favPid}/items`,{method:"DELETE",body:JSON.stringify({items:[{uri}]})})).catch(e=>console.warn("fav sync",e))};
 $("spConnect").onclick=connect;$("spGo").onclick=go;$("spOut").onclick=()=>{localStorage.removeItem("sp-tok");show("spOff");msg("Disconnected.")};
 $("spDest").onchange=()=>{$("spNew").hidden=$("spDest").value!=="new";if(!$("spNew").hidden)$("spNew").focus()};
 (async()=>{const q=new URLSearchParams(location.search);
  if(q.get("error")){msg("Spotify connection was cancelled.");history.replaceState(null,"",base)}
  if(q.get("code")){try{await tokenReq({grant_type:"authorization_code",code:q.get("code"),redirect_uri:REDIR,code_verifier:ls.get("sp-ver")});msg("Connected to Spotify ✓")}catch(e){msg("Couldn't connect: "+e.message)}history.replaceState(null,"",base)}
- if(await token()){show("spOn");try{await loadPlaylists()}catch(e){msg("Connected, but couldn't load playlists: "+e.message)}}else show("spOff")})();
+ if(await token()){show("spOn");try{await loadPlaylists();await favSync()}catch(e){msg("Connected, but couldn't load playlists: "+e.message)}}else show("spOff")})();
 })();
 </script>
 <script src="https://open.spotify.com/embed/iframe-api/v1" async></script>
