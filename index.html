@@ -137,6 +137,7 @@ body{padding-block:0 260px}
       <select id="spDest" aria-label="Where to add"><option value="liked">Add to Liked Songs</option><optgroup label="My playlists" id="spPls"></optgroup><option value="new">New playlist…</option></select>
       <input id="spNew" placeholder="New playlist name" hidden>
       <button class="play" id="spGo">Add ⭐ favourites</button>
+      <label class="auto"><input type="checkbox" id="spApp"> Play full songs in my Spotify app</label>
       <button class="chip" id="spOut">Disconnect</button>
     </div>
     <p id="spMsg"></p>
@@ -260,7 +261,7 @@ renderTabs();renderList();renderDeck();
 
 /* ===== Spotify connection (PKCE, no secret) ===== */
 (()=>{const CID="b55c979f27df4f369da78c29f8ec1e28";
-const SCOPES="user-library-modify user-library-read playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public user-follow-modify";
+const SCOPES="user-library-modify user-library-read playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public user-follow-modify user-modify-playback-state user-read-playback-state";
 const msg=t=>{$("spMsg").textContent=t};
 const show=id=>["spFile","spOff","spOn"].forEach(x=>$(x).hidden=x!==id);
 window.spMenu=(el)=>{toast("Open the new player to add songs to Spotify")};$("npdots").onclick=e=>{e.stopPropagation();window.spMenu()};
@@ -273,7 +274,7 @@ const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-")
 async function connect(){const v=b64u(crypto.getRandomValues(new Uint8Array(48)));ls.set("sp-ver",v);const ch=b64u(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(v)));
  location.href="https://accounts.spotify.com/authorize?"+new URLSearchParams({response_type:"code",client_id:CID,scope:SCOPES,redirect_uri:REDIR,code_challenge_method:"S256",code_challenge:ch})}
 async function tokenReq(body){const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:CID,...body})});const j=await r.json();if(!r.ok)throw new Error(j.error_description||j.error||"token error");
- const old=ls.get("sp-tok")||{};ls.set("sp-tok",{a:j.access_token,r:j.refresh_token||old.r,e:Date.now()+(j.expires_in-60)*1000});}
+ const old=ls.get("sp-tok")||{};ls.set("sp-tok",{a:j.access_token,r:j.refresh_token||old.r,s:j.scope||old.s||"",e:Date.now()+(j.expires_in-60)*1000});}
 async function token(){const t=ls.get("sp-tok");if(!t)return null;if(Date.now()<t.e)return t.a;try{await tokenReq({grant_type:"refresh_token",refresh_token:t.r});return ls.get("sp-tok").a}catch(e){localStorage.removeItem("sp-tok");return null}}
 async function api(path,opt={}){const a=await token();if(!a)throw new Error("not connected");const r=await fetch(path.startsWith("http")?path:"https://api.spotify.com/v1"+path,{...opt,headers:{Authorization:"Bearer "+a,"Content-Type":"application/json",...(opt.headers||{})}});
  if(r.status===429){await new Promise(z=>setTimeout(z,(+r.headers.get("Retry-After")||2)*1000));return api(path,opt)}
@@ -330,12 +331,29 @@ async function favSync(){try{let p=PLS.find(x=>x.name===FAVNAME);
  if(added){saveFavs();renderTabs();renderList(false);toast(`${added} favourite${added===1?"":"s"} synced from your other device ⭐`)}}catch(e){console.warn("fav sync",e)}}
 const _toggleFav=toggleFav;toggleFav=function(i){_toggleFav(i);const x=SONGS[i];if(!favPid||!x||!x.id)return;
  const uri="spotify:track:"+x.id;(favs.has(i)?addToPlaylist(favPid,[x.id]):api(`/playlists/${favPid}/items`,{method:"DELETE",body:JSON.stringify({items:[{uri}]})})).catch(e=>console.warn("fav sync",e))};
-$("spConnect").onclick=connect;$("spGo").onclick=go;$("spOut").onclick=()=>{localStorage.removeItem("sp-tok");show("spOff");msg("Disconnected.")};
+/* full-song playback through the Spotify app (Spotify Connect) */
+const touch=matchMedia("(pointer:coarse)").matches;const pref=ls.get("sp-app");$("spApp").checked=pref===null?touch:!!pref;
+const remoteOn=()=>$("spApp").checked&&!!ls.get("sp-tok");const syncEmbed=()=>{$("embed").hidden=remoteOn()};
+$("spApp").onchange=()=>{ls.set("sp-app",$("spApp").checked);syncEmbed();const t=ls.get("sp-tok");if($("spApp").checked&&t&&!(t.s||"").includes("user-modify-playback-state"))msg("To play in the app, tap Disconnect, then Connect Spotify again and approve.")};
+let rPlaying=false;
+async function remotePlay(){const s=SONGS[queue[qpos]];if(!s)return;
+ if(!s.id){toast(s.y?"Not on Spotify, opening it on YouTube":"No exact match, opening a Spotify search");window.open(spotifyUrl(s),"_blank");return}
+ const uris=queue.slice(qpos,qpos+60).map(i=>SONGS[i]).filter(x=>x&&x.id).map(x=>"spotify:track:"+x.id);
+ try{await api("/me/player/play",{method:"PUT",body:JSON.stringify({uris})});rPlaying=true;$("play").textContent="⏸ Pause";toast("Playing in your Spotify app")}
+ catch(e){if(e.status===404){msg("Open the Spotify app, play any song for a second, then come back and tap ▶ again.");toast("Open Spotify first");location.href="spotify:track:"+s.id}
+  else if(e.status===403||e.status===401){msg("Tap Disconnect, then Connect Spotify again to allow playing in the app.")}else msg("Spotify said: "+e.message)}}
+const _playCur=playCur;playCur=function(){if(remoteOn())remotePlay();else _playCur()};
+const _playBtn=$("play").onclick;$("play").onclick=async()=>{if(!remoteOn())return _playBtn();if(queue[qpos]==null){surprise("any");return}
+ try{const st=await api("/me/player");if(st&&st.is_playing){await api("/me/player/pause",{method:"PUT"});rPlaying=false;$("play").textContent="▶ Play"}
+  else if(st&&st.item&&SONGS[queue[qpos]]&&st.item.id===SONGS[queue[qpos]].id){await api("/me/player/play",{method:"PUT"});$("play").textContent="⏸ Pause"}
+  else remotePlay()}catch(e){remotePlay()}};
+syncEmbed();
+$("spConnect").onclick=connect;$("spGo").onclick=go;$("spOut").onclick=()=>{localStorage.removeItem("sp-tok");show("spOff");syncEmbed();msg("Disconnected.")};
 $("spDest").onchange=()=>{$("spNew").hidden=$("spDest").value!=="new";if(!$("spNew").hidden)$("spNew").focus()};
 (async()=>{const q=new URLSearchParams(location.search);
  if(q.get("error")){msg("Spotify connection was cancelled.");history.replaceState(null,"",base)}
  if(q.get("code")){try{await tokenReq({grant_type:"authorization_code",code:q.get("code"),redirect_uri:REDIR,code_verifier:ls.get("sp-ver")});msg("Connected to Spotify ✓")}catch(e){msg("Couldn't connect: "+e.message)}history.replaceState(null,"",base)}
- if(await token()){show("spOn");try{await loadPlaylists();await favSync()}catch(e){msg("Connected, but couldn't load playlists: "+e.message)}}else show("spOff")})();
+ if(await token()){show("spOn");syncEmbed();try{await loadPlaylists();await favSync()}catch(e){msg("Connected, but couldn't load playlists: "+e.message)}}else show("spOff")})();
 })();
 </script>
 <script src="https://open.spotify.com/embed/iframe-api/v1" async></script>
