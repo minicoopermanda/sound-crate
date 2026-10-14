@@ -328,8 +328,13 @@ async function favSync(){try{let p=PLS.find(x=>x.name===FAVNAME);
  favPid=p.id;const remote=await playlistIds(favPid);let added=0;
  remote.forEach(id=>{const i=idIdx[id];if(i!==undefined&&!favs.has(i)){favs.add(i);added++}});
  const push=[...new Set([...favs].map(i=>SONGS[i]).filter(x=>x&&x.id&&!remote.has(x.id)).map(x=>x.id))];if(push.length)await addToPlaylist(favPid,push);
+ /* songs not on Spotify ride along in the playlist description */
+ try{const pl=await api(`/playlists/${favPid}?fields=description`);const m=((pl&&pl.description)||"").match(/\[x:([\d,]*)\]/);
+  if(m)m[1].split(",").filter(Boolean).map(Number).forEach(i=>{if(SONGS[i]&&!SONGS[i].id&&!favs.has(i)){favs.add(i);added++}});await saveNoId()}catch(e){console.warn("fav desc",e)}
  if(added){saveFavs();renderTabs();renderList(false);toast(`${added} favourite${added===1?"":"s"} synced from your other device ⭐`)}}catch(e){console.warn("fav sync",e)}}
-const _toggleFav=toggleFav;toggleFav=function(i){_toggleFav(i);const x=SONGS[i];if(!favPid||!x||!x.id)return;
+async function saveNoId(){if(!favPid)return;const x=[...favs].filter(i=>SONGS[i]&&!SONGS[i].id).sort((a,b)=>a-b);
+ await api(`/playlists/${favPid}`,{method:"PUT",body:JSON.stringify({description:`Stars from Sound Crate (keeps laptop and phone in sync) [x:${x.join(",")}]`})})}
+const _toggleFav=toggleFav;toggleFav=function(i){_toggleFav(i);const x=SONGS[i];if(!favPid||!x)return;if(!x.id){saveNoId().catch(e=>console.warn("fav desc",e));return}
  const uri="spotify:track:"+x.id;(favs.has(i)?addToPlaylist(favPid,[x.id]):api(`/playlists/${favPid}/items`,{method:"DELETE",body:JSON.stringify({items:[{uri}]})})).catch(e=>console.warn("fav sync",e))};
 /* full-song playback through the Spotify app (Spotify Connect) */
 const touch=matchMedia("(pointer:coarse)").matches;const pref=ls.get("sp-app");$("spApp").checked=pref===null?touch:!!pref;
